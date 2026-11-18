@@ -5,6 +5,11 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -136,15 +141,41 @@ class CamService : Service() {
     private var btOn = false
     private var starting = false
 
+    private fun btHeadset(): Boolean = try {
+        getSystemService(BluetoothManager::class.java).adapter.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED
+    } catch (e: Exception) { false }
+
+    private fun waitSco(go: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= 31) { ui.postDelayed({ go() }, 1500); return }
+        var done = false
+        var rcv: BroadcastReceiver? = null
+        fun fin() {
+            if (done) return
+            done = true
+            try { unregisterReceiver(rcv) } catch (e: Exception) {}
+            ui.postDelayed({ go() }, 400)
+        }
+        rcv = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                if (i?.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1) == AudioManager.SCO_AUDIO_STATE_CONNECTED) fin()
+            }
+        }
+        registerReceiver(rcv, IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED))
+        ui.postDelayed({ fin() }, 4000)
+    }
+
     private fun routeBt(): Boolean {
+        if (!btHeadset()) return false
         val am = getSystemService(AudioManager::class.java)
         return try {
             if (Build.VERSION.SDK_INT >= 31) {
                 val d = am.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
                 if (d == null) false else { am.mode = AudioManager.MODE_IN_COMMUNICATION; am.setCommunicationDevice(d) }
             } else {
-                val has = am.getDevices(AudioManager.GET_DEVICES_INPUTS).any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
-                if (has) { am.mode = AudioManager.MODE_IN_COMMUNICATION; am.startBluetoothSco(); am.isBluetoothScoOn = true; true } else false
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                am.startBluetoothSco()
+                am.isBluetoothScoOn = true
+                true
             }
         } catch (e: Exception) { false }
     }
@@ -162,7 +193,7 @@ class CamService : Service() {
         if (isRec || mr != null || dev == null || starting) return
         starting = true
         btOn = routeBt()
-        if (btOn) ui.postDelayed({ doStartRec() }, 1500) else doStartRec()
+        if (btOn) waitSco { doStartRec() } else doStartRec()
     }
 
     private fun doStartRec() {
