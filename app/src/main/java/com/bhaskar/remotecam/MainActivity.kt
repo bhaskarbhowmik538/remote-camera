@@ -64,7 +64,7 @@ class MainActivity : AppCompatActivity() {
         label("Start and stop recording on another phone's camera.")
         serverField = field("Server address", prefs.getString("server", "") ?: "")
         button("This phone is the camera") {
-            if (serverOk()) perms.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS))
+            if (serverOk()) perms.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.BLUETOOTH_CONNECT))
         }
         button("This phone is the remote") { if (serverOk()) remote() }
         label("Built by Bhaskar Bhowmik", 13f)
