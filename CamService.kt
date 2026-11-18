@@ -15,6 +15,8 @@ import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.hardware.camera2.*
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaRecorder
@@ -115,8 +117,41 @@ class CamService : Service() {
         }, ch)
     }
 
+    private var btOn = false
+    private var starting = false
+
+    private fun routeBt(): Boolean {
+        val am = getSystemService(AudioManager::class.java)
+        return try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                val d = am.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
+                if (d == null) false else { am.mode = AudioManager.MODE_IN_COMMUNICATION; am.setCommunicationDevice(d) }
+            } else {
+                val has = am.getDevices(AudioManager.GET_DEVICES_INPUTS).any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                if (has) { am.mode = AudioManager.MODE_IN_COMMUNICATION; am.startBluetoothSco(); am.isBluetoothScoOn = true; true } else false
+            }
+        } catch (e: Exception) { false }
+    }
+
+    private fun unrouteBt() {
+        val am = getSystemService(AudioManager::class.java)
+        try {
+            if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
+            else { am.isBluetoothScoOn = false; am.stopBluetoothSco() }
+            am.mode = AudioManager.MODE_NORMAL
+        } catch (e: Exception) {}
+    }
+
     private fun startRec() {
-        if (isRec || mr != null || dev == null) return
+        if (isRec || mr != null || dev == null || starting) return
+        starting = true
+        btOn = routeBt()
+        if (btOn) ui.postDelayed({ doStartRec() }, 1500) else doStartRec()
+    }
+
+    private fun doStartRec() {
+        starting = false
+        if (!active) return
         try {
             val cv = ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, "RemoteCam_" + System.currentTimeMillis())
@@ -129,7 +164,7 @@ class CamService : Service() {
             val pfd = contentResolver.openFileDescriptor(uri, "w") ?: return
             recPfd = pfd
             val m = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else MediaRecorder()
-            m.setAudioSource(MediaRecorder.AudioSource.MIC)
+            m.setAudioSource(if (btOn) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.MIC)
             m.setVideoSource(MediaRecorder.VideoSource.SURFACE)
             m.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             m.setOutputFile(pfd.fileDescriptor)
@@ -160,6 +195,7 @@ class CamService : Service() {
     }
 
     private fun cleanupRecorder(ok: Boolean) {
+        if (btOn) { unrouteBt(); btOn = false }
         try { mr?.release() } catch (e: Exception) {}
         mr = null
         try { recPfd?.close() } catch (e: Exception) {}
@@ -236,6 +272,7 @@ class CamService : Service() {
             try { mr?.stop() } catch (e: Exception) {}
             cleanupRecorder(true)
         }
+        if (btOn) { unrouteBt(); btOn = false }
         try { session?.close() } catch (e: Exception) {}
         try { dev?.close() } catch (e: Exception) {}
         try { reader?.close() } catch (e: Exception) {}
